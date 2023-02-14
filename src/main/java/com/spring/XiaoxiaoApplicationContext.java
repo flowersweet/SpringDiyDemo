@@ -1,8 +1,11 @@
 package com.spring;
 
 
+import com.xiao.service.BeanNameAwre;
+
 import java.beans.Introspector;
 import java.io.File;
+import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.net.URL;
 import java.util.ArrayList;
@@ -15,6 +18,8 @@ public class XiaoxiaoApplicationContext {
 
     private Map<String,BeanDefinition> beanDefinitionMap=new HashMap<>();
     private Map<String,Object> singletonObjects=new HashMap<>();
+    //针对所有bean
+    private List<BeanPostProcessor> beanPostProcessorList=new ArrayList<>();
 
     public XiaoxiaoApplicationContext(Class configclass){
         this.configclass=configclass;
@@ -36,6 +41,32 @@ public class XiaoxiaoApplicationContext {
         Class classType=beanDefinition.getClassType();
         try {
             bean=classType.getConstructor().newInstance();
+            for(Field field :classType.getDeclaredFields()){
+                //属性对象需要依赖注入
+                if(field.isAnnotationPresent(Autowired.class)){
+                    //反射
+                    field.setAccessible(true);
+                    //根据属性名字找对象，赋值给当前类的对象属性
+                    Object object=getBean(field.getName());
+                    field.set(bean,object);
+                }
+            }
+
+            //回调Aware
+            if (bean instanceof BeanNameAwre) {
+                ((BeanNameAwre) bean).setBeanName(beanName);
+            }
+
+            //初始化
+            if(bean instanceof InitializingBean){
+                ((InitializingBean) bean).afterPropertiesSet();
+            }
+
+            //初始化后
+            for(BeanPostProcessor postProcessor:beanPostProcessorList){
+                bean=postProcessor.postProcessAfterInitialization(bean,beanName);
+            }
+
         } catch (InstantiationException e) {
             e.printStackTrace();
         } catch (IllegalAccessException e) {
@@ -43,6 +74,8 @@ public class XiaoxiaoApplicationContext {
         } catch (InvocationTargetException e) {
             e.printStackTrace();
         } catch (NoSuchMethodException e) {
+            e.printStackTrace();
+        } catch (Exception e) {
             e.printStackTrace();
         }
         return bean;
@@ -63,12 +96,16 @@ public class XiaoxiaoApplicationContext {
                 try {
                     Class<?> clazz = classLoader.loadClass(absPath);
                     if (clazz.isAnnotationPresent(Component.class)) {
+                        //当前类实现了BeanPostProcessor接口
+                        if(BeanPostProcessor.class.isAssignableFrom(clazz)){
+                            BeanPostProcessor beanPostProcessor=(BeanPostProcessor)clazz.getConstructor().newInstance();
+                            beanPostProcessorList.add(beanPostProcessor);
+                        }
 
                         Component component = clazz.getAnnotation(Component.class);
                         String benaName = component.value();
                         if ("".equals(benaName)) {
                             benaName=Introspector.decapitalize(clazz.getSimpleName());
-                            System.out.println("beanName="+benaName);
                         }
                         BeanDefinition beanDefinition = new BeanDefinition();
 
@@ -86,6 +123,14 @@ public class XiaoxiaoApplicationContext {
 
                     }
                 } catch (ClassNotFoundException e) {
+                    e.printStackTrace();
+                } catch (InstantiationException e) {
+                    e.printStackTrace();
+                } catch (InvocationTargetException e) {
+                    e.printStackTrace();
+                } catch (NoSuchMethodException e) {
+                    e.printStackTrace();
+                } catch (IllegalAccessException e) {
                     e.printStackTrace();
                 }
             }
@@ -114,10 +159,13 @@ public class XiaoxiaoApplicationContext {
         }
         BeanDefinition beanDefinition=beanDefinitionMap.get(beanName);
         if(beanDefinition.getScope().equals("singleton")){
+            //依赖注入对象时，被注入的对象可能还没有创建bean
             if(singletonObjects.containsKey(beanName)){
                 return singletonObjects.get(beanName);
             }else{
-                return createBean(beanName,beanDefinition);
+                Object bean=createBean(beanName,beanDefinition);
+                singletonObjects.put(beanName,bean);
+                return bean;
             }
         }else{
             return createBean(beanName,beanDefinition);
